@@ -6,6 +6,7 @@ import joblib
 import json
 from datetime import datetime
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
 import os
 
 # Function to load models and data
@@ -44,9 +45,20 @@ if model is None or scaler is None or feature_cols is None:
     st.warning("Please train the models first by running the model_training.ipynb notebook.")
     st.stop()
 
-# Load data
-main_unit_df = pd.read_csv('main_unit_assembly_data.csv')
-component_df = pd.read_csv('component_assembly_data.csv')
+# Convert datetime columns and create features
+main_unit_df['TRNDATE'] = pd.to_datetime(main_unit_df['TRNDATE'])
+main_unit_df['INSERTTIME'] = pd.to_datetime(main_unit_df['INSERTTIME'])
+
+# Create encoded columns and store encoders
+le_dict = {}
+for col in ['LINE', 'WORKSTATION', 'STAGE', 'VENDOR']:
+    le = LabelEncoder()
+    main_unit_df[f'{col}_encoded'] = le.fit_transform(main_unit_df[col])
+    le_dict[col] = le
+
+# Add other features
+main_unit_df['time_diff'] = (main_unit_df['TRNDATE'] - main_unit_df['INSERTTIME']).dt.total_seconds()
+main_unit_df['has_error'] = (main_unit_df['A_ERRORCODE'] != '').astype(int)
 
 # Set page config
 st.set_page_config(page_title="Manufacturing Quality Analysis", layout="wide")
@@ -80,7 +92,6 @@ if page == "Overview":
     
     # Failure Trends
     st.subheader("Failure Trends")
-    main_unit_df['TRNDATE'] = pd.to_datetime(main_unit_df['TRNDATE'])
     daily_failures = main_unit_df.groupby(main_unit_df['TRNDATE'].dt.date)['RESULTFLAG'].apply(
         lambda x: (x == 'F').mean()
     ).reset_index()
@@ -140,22 +151,25 @@ elif page == "Predictions":
         selected_time = st.time_input("Select Time")
     
     if st.button("Predict Failure Probability"):
-        # Prepare features
-        datetime_str = f"{selected_date} {selected_time}"
-        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        # Create features matching the training data
+        dt = datetime.combine(selected_date, selected_time)
         
+        # Create feature dictionary
         features = pd.DataFrame({
             'hour': [dt.hour],
             'day': [dt.day],
             'month': [dt.month],
             'day_of_week': [dt.weekday()],
             'time_diff': [0],  # Default value for prediction
-            'LINE_encoded': [main_unit_df[main_unit_df['LINE'] == selected_line]['LINE_encoded'].iloc[0]],
-            'WORKSTATION_encoded': [main_unit_df[main_unit_df['WORKSTATION'] == selected_workstation]['WORKSTATION_encoded'].iloc[0]],
-            'STAGE_encoded': [main_unit_df[main_unit_df['STAGE'] == selected_stage]['STAGE_encoded'].iloc[0]],
-            'VENDOR_encoded': [main_unit_df[main_unit_df['VENDOR'] == selected_vendor]['VENDOR_encoded'].iloc[0]],
+            'LINE_encoded': [le_dict['LINE'].transform([selected_line])[0]],
+            'WORKSTATION_encoded': [le_dict['WORKSTATION'].transform([selected_workstation])[0]],
+            'STAGE_encoded': [le_dict['STAGE'].transform([selected_stage])[0]],
+            'VENDOR_encoded': [le_dict['VENDOR'].transform([selected_vendor])[0]],
             'has_error': [0]  # Default value for prediction
         })
+        
+        # Ensure features are in the correct order
+        features = features[feature_cols]
         
         # Scale features and predict
         features_scaled = scaler.transform(features)
@@ -168,7 +182,7 @@ elif page == "Predictions":
         elif failure_prob > 0.3:
             st.warning("⚠️ Moderate risk of failure. Monitor closely.")
         else:
-            st.success("✅ Low risk of failure.")
+            st.success("✓ Low risk of failure.")
 
 elif page == "Cost Impact":
     st.subheader("Cost Impact Analysis")
@@ -200,4 +214,4 @@ elif page == "Cost Impact":
 
 # Footer
 st.markdown("---")
-st.markdown("TCS AI Hackathon - Manufacturing Quality Analysis System")
+st.markdown("Manufacturing Quality Analysis System - AI-Powered Defect Prediction")
